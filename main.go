@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
@@ -16,8 +17,8 @@ type parameters struct {
 	Body string `json:"body"`
 }
 
-type validVals struct {
-	Valid bool `json:"valid"`
+type cleanedVals struct {
+	CleanedBody string `json:"cleaned_body"`
 }
 
 type errorVals struct {
@@ -94,9 +95,7 @@ func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respBody := validVals{
-		Valid: true,
-	}
+	respBody := clean_body(params.Body)
 
 	dat, err := json.Marshal(respBody)
 	if err != nil {
@@ -132,4 +131,40 @@ func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
 	cfg.fileserverHits.Store(0)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Hits reset to 0"))
+}
+
+func clean_body(body string) cleanedVals {
+	profaneWords := map[string]bool{
+		"kerfuffle": true,
+		"sharbert":  true,
+		"fornax":    true,
+	}
+	var cleaned string
+
+	splitted := strings.Split(body, " ")
+
+	for i, split := range splitted {
+		_, exists := profaneWords[strings.ToLower(split)]
+		if exists {
+			if i == 0 {
+				fmt.Println("first")
+				cleaned = "****"
+				continue
+			}
+			cleaned = cleaned + " ****"
+			continue
+		}
+		if i == 0 {
+			fmt.Println("first")
+			cleaned = split
+			continue
+		}
+		cleaned = cleaned + " " + split
+	}
+
+	respBody := cleanedVals{
+		CleanedBody: cleaned,
+	}
+
+	return respBody
 }
