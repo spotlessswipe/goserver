@@ -1,16 +1,22 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"goserver/internal/database"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
+
+	_ "github.com/lib/pq"
 )
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	dbQuerries     *database.Queries
 }
 
 type parameters struct {
@@ -28,9 +34,17 @@ type errorVals struct {
 func main() {
 	const filepathRoot = "."
 	const port = "8080"
+	dbURL := os.Getenv("DB_URL")
+
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatal("Error Opening Posgres Database")
+	}
+	dbQueries := database.New(db)
 
 	apiCfg := apiConfig{
 		fileserverHits: atomic.Int32{},
+		dbQuerries:     dbQueries,
 	}
 
 	mux := http.NewServeMux()
