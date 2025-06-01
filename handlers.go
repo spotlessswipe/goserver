@@ -3,28 +3,18 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"goserver/internal/database"
-	"log"
 	"net/http"
 	"strings"
-	"sync/atomic"
+	"time"
+
+	"github.com/google/uuid"
 )
 
-type apiConfig struct {
-	fileserverHits atomic.Int32
-	dbQuerries     *database.Queries
-}
-
-type parameters struct {
-	Body string `json:"body"`
-}
-
-type cleanedVals struct {
-	CleanedBody string `json:"cleaned_body"`
-}
-
-type errorVals struct {
-	Error string `json:"error"`
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
 }
 
 func handlerReadiness(w http.ResponseWriter, r *http.Request) {
@@ -33,69 +23,85 @@ func handlerReadiness(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(http.StatusText(http.StatusOK)))
 }
 
-func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
-	w.Header().Add("Content-Type", "application/json")
+func handlerChirpsValidate(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Body string `json:"body"`
+	}
+	type returnVals struct {
+		CleanedBody string `json:"cleaned_body"`
+	}
 
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
 	err := decoder.Decode(&params)
 	if err != nil {
-		log.Printf("Error decoding parameters: %s", err)
-		respBody := errorVals{
-			Error: "Something went wrong",
-		}
-
-		dat, err := json.Marshal(respBody)
-		if err != nil {
-			log.Printf("Error marshalling JSON: %s", err)
-			w.WriteHeader(500)
-			return
-		}
-
-		w.WriteHeader(500)
-		w.Write(dat)
-	}
-
-	if len(params.Body) > 140 {
-		log.Println("Chirp is too long")
-		respBody := errorVals{
-			Error: "Chirp is too long",
-		}
-
-		dat, err := json.Marshal(respBody)
-		if err != nil {
-			log.Printf("Error marshalling JSON: %s", err)
-			w.WriteHeader(500)
-			return
-		}
-		w.WriteHeader(400)
-		w.Write(dat)
+		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters", err)
 		return
 	}
 
-	respBody := clean_body(params.Body)
+	const maxChirpLength = 140
+	if len(params.Body) > maxChirpLength {
+		respondWithError(w, http.StatusBadRequest, "Chirp is too long", nil)
+		return
+	}
 
-	dat, err := json.Marshal(respBody)
+	badWords := map[string]struct{}{
+		"kerfuffle": {},
+		"sharbert":  {},
+		"fornax":    {},
+	}
+	cleaned := getCleanedBody(params.Body, badWords)
+
+	respondWithJSON(w, http.StatusOK, returnVals{
+		CleanedBody: cleaned,
+	})
+}
+
+func (cfg *apiConfig) handlerUsersCreate(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email string `json:"email"`
+	}
+	type response struct {
+		User
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
 	if err != nil {
-		log.Printf("Error marshalling JSON: %s", err)
-		w.WriteHeader(500)
+		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters", err)
 		return
 	}
 
-	w.WriteHeader(200)
-	w.Write(dat)
+	user, err := cfg.db.CreateUser(r.Context(), params.Email)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't create user", err)
+		return
+	}
+
+	respondWithJSON(w, http.StatusCreated, response{
+		User: User{
+			ID:        user.ID,
+			CreatedAt: user.CreatedAt,
+			UpdatedAt: user.UpdatedAt,
+			Email:     user.Email,
+		},
+	})
 }
 
 func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
-	html_body := fmt.Sprintf(`<html> 
-  <body>
-    <h1>Welcome, Chirpy Admin</h1>
-    <p>Chirpy has been visited %d times!</p>
-  </body>
-</html>`, cfg.fileserverHits.Load())
-	w.Header().Add("Content-Type", "text/html; charset=utf-8")
+	w.Header().Add("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(html_body))
+	w.Write([]byte(fmt.Sprintf(`
+<html>
+
+<body>
+	<h1>Welcome, Chirpy Admin</h1>
+	<p>Chirpy has been visited %d times!</p>
+</body>
+
+</html>
+	`, cfg.fileserverHits.Load())))
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -106,43 +112,31 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 }
 
 func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
+	if cfg.platform != "dev" {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("Reset is only allowed in dev environment."))
+		return
+	}
+
 	cfg.fileserverHits.Store(0)
+	err := cfg.db.Reset(r.Context())
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("Failed to reset the database: " + err.Error()))
+		return
+	}
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Hits reset to 0"))
+	w.Write([]byte("Hits reset to 0 and database reset to initial state."))
 }
 
-func clean_body(body string) cleanedVals {
-	profaneWords := map[string]bool{
-		"kerfuffle": true,
-		"sharbert":  true,
-		"fornax":    true,
-	}
-	var cleaned string
-
-	splitted := strings.Split(body, " ")
-
-	for i, split := range splitted {
-		_, exists := profaneWords[strings.ToLower(split)]
-		if exists {
-			if i == 0 {
-				fmt.Println("first")
-				cleaned = "****"
-				continue
-			}
-			cleaned = cleaned + " ****"
-			continue
+func getCleanedBody(body string, badWords map[string]struct{}) string {
+	words := strings.Split(body, " ")
+	for i, word := range words {
+		loweredWord := strings.ToLower(word)
+		if _, ok := badWords[loweredWord]; ok {
+			words[i] = "****"
 		}
-		if i == 0 {
-			fmt.Println("first")
-			cleaned = split
-			continue
-		}
-		cleaned = cleaned + " " + split
 	}
-
-	respBody := cleanedVals{
-		CleanedBody: cleaned,
-	}
-
-	return respBody
+	cleaned := strings.Join(words, " ")
+	return cleaned
 }
