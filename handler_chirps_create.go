@@ -3,11 +3,11 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"goserver/internal/database"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/bootdotdev/learn-http-servers/internal/database"
 	"github.com/google/uuid"
 )
 
