@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"goserver/internal/auth"
+	"goserver/internal/database"
 	"net/http"
 	"time"
 
@@ -17,7 +19,8 @@ type User struct {
 
 func (cfg *apiConfig) handlerUsersCreate(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	type response struct {
 		User
@@ -31,7 +34,16 @@ func (cfg *apiConfig) handlerUsersCreate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	user, err := cfg.db.CreateUser(r.Context(), params.Email)
+	hashPass, err := auth.HashPassword(params.Password)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't hash password", err)
+		return
+	}
+
+	user, err := cfg.db.CreateUser(r.Context(), database.CreateUserParams{
+		Email:          params.Email,
+		HashedPassword: hashPass,
+	})
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't create user", err)
 		return
