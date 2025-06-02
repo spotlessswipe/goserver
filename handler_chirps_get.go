@@ -2,6 +2,8 @@ package main
 
 import (
 	"net/http"
+
+	"github.com/google/uuid"
 )
 
 func (cfg *apiConfig) handlerChirpsRetrieve(w http.ResponseWriter, r *http.Request) {
@@ -23,4 +25,21 @@ func (cfg *apiConfig) handlerChirpsRetrieve(w http.ResponseWriter, r *http.Reque
 	}
 
 	respondWithJSON(w, http.StatusOK, chirps)
+}
+
+func (cfg *apiConfig) handlerChirpRetrieve(w http.ResponseWriter, r *http.Request) {
+	path := r.PathValue("chirpID")
+	id, err := uuid.Parse(path)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Error parsing path to UUID", err)
+		return
+	}
+
+	dbChirp, err := cfg.db.GetChirp(r.Context(), id)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Couldn't retrieve chirp", err)
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, dbChirp)
 }
