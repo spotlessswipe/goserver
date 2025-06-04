@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"goserver/internal/auth"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -22,6 +23,16 @@ func (cfg *apiConfig) handlerWebhook(w http.ResponseWriter, r *http.Request) {
 	err := decoder.Decode(&params)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters", err)
+		return
+	}
+
+	apiKey, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't find apikey", err)
+		return
+	}
+	if apiKey != cfg.polkaSecret {
+		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
